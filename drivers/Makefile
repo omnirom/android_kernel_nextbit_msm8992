@@ -171,3 +171,5 @@ obj-$(CONFIG_SENSORS)		+= sensors/
 obj-$(CONFIG_SENSORS_SSC)	+= sensors/
 
 obj-y				+= fih/
+
+obj-$(CONFIG_CPU_QUIET)		+= cpuquiet/
