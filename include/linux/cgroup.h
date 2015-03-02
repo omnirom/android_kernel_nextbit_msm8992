@@ -867,7 +867,9 @@ bool css_is_ancestor(struct cgroup_subsys_state *cg,
 /* Get id and depth of css */
 unsigned short css_id(struct cgroup_subsys_state *css);
 unsigned short css_depth(struct cgroup_subsys_state *css);
-struct cgroup_subsys_state *cgroup_css_from_dir(struct file *f, int id);
+struct cgroup_subsys_state *css_tryget_online_from_dir(struct dentry *dentry,
+						       struct cgroup_subsys *ss);
+int cgroup_attach_task_to_root(struct task_struct *tsk, int wait);
 
 /*
  * Default Android check for whether the current process is allowed to move a
@@ -905,6 +907,11 @@ static inline int cgroup_attach_task_all(struct task_struct *from,
 
 static inline int subsys_cgroup_allow_attach(struct cgroup *cgrp,
 					     struct cgroup_taskset *tset)
+{
+	return 0;
+}
+
+static inline int cgroup_attach_task_to_root(struct task_struct *tsk, int wait)
 {
 	return 0;
 }
