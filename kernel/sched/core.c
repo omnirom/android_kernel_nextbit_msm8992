@@ -1057,6 +1057,90 @@ void register_task_migration_notifier(struct notifier_block *n)
 
 #ifdef CONFIG_SCHED_HMP
 
+static LIST_HEAD(cluster_head);
+static DEFINE_MUTEX(cluster_lock);
+int num_clusters;
+static cpumask_t all_cluster_cpus = CPU_MASK_NONE;
+DECLARE_BITMAP(all_cluster_ids, NR_CPUS);
+static struct sched_cluster *sched_cluster[NR_CPUS];
+
+static struct sched_cluster init_cluster = {
+	.list			=	LIST_HEAD_INIT(init_cluster.list),
+	.cpus			=	CPU_MASK_ALL,
+	.id			=	0,
+	.max_power_cost		=	1,
+};
+
+#define for_each_sched_cluster(cluster) \
+	list_for_each_entry_rcu(cluster, &cluster_head, list)
+
+static inline int new_cluster(struct cpufreq_policy *policy)
+{
+	return !cpumask_intersects(policy->related_cpus, &all_cluster_cpus);
+}
+
+/*
+ * Insert cluster in @cluster_head list such that the list is sorted in
+ * ascending order based on cluster->max_power_cost
+ */
+static void insert_cluster(struct sched_cluster *cluster)
+{
+	struct sched_cluster *tmp;
+	struct list_head *head = &cluster_head;
+
+	for_each_sched_cluster(tmp) {
+		if (cluster->max_power_cost <= tmp->max_power_cost)
+			break;
+		head = &tmp->list;
+	}
+
+	list_add_rcu(&cluster->list, head);
+}
+
+/*
+ * Assign cluster->id such that cluster with lower id has lower max_power_cost
+ * compared to another cluster with higher id. This simplifies cpu selection
+ * logic in select_best_cpu()
+ */
+static void assign_cluster_ids(void)
+{
+	struct sched_cluster *cluster;
+	int pos = 0;
+
+	for_each_sched_cluster(cluster) {
+		cluster->id = pos;
+		sched_cluster[pos++] = cluster;
+	}
+}
+
+static void add_cluster(struct cpufreq_policy *policy)
+{
+	struct sched_cluster *cluster;
+	int cpu = cpumask_first(policy->related_cpus);
+
+	cluster = kzalloc(sizeof(struct sched_cluster), GFP_KERNEL);
+	if (!cluster)
+		return;
+
+	INIT_LIST_HEAD(&cluster->list);
+	cpumask_copy(&cluster->cpus, policy->related_cpus);
+	cluster->max_power_cost = power_cost(max_task_load(), cpu);
+
+	mutex_lock(&cluster_lock);
+	cpumask_or(&all_cluster_cpus, &all_cluster_cpus, policy->related_cpus);
+	for_each_cpu(cpu, policy->related_cpus)
+		cpu_rq(cpu)->cluster = cluster;
+
+	insert_cluster(cluster);
+
+	set_bit(num_clusters, all_cluster_ids);
+	num_clusters++;
+
+	assign_cluster_ids();
+
+	mutex_unlock(&cluster_lock);
+}
+
 static int __init set_sched_enable_hmp(char *str)
 {
 	int enable_hmp = 0;
@@ -2161,20 +2245,20 @@ void sched_get_cpus_busy(unsigned long *busy, const struct cpumask *query_cpus)
 	for_each_cpu(cpu, query_cpus) {
 		rq = cpu_rq(cpu);
 
-		update_task_ravg(rq->curr, rq, TASK_UPDATE, sched_clock(), 0);
+		update_task_ravg(rq->curr, rq, TASK_UPDATE, sched_ktime_clock(), 0);
 		load[i] = rq->old_busy_time = rq->prev_runnable_sum;
 		/*
-		 * Scale load in reference to rq->max_possible_freq.
+		 * Scale load in reference to cluster->max_possible_freq.
 		 *
 		 * Note that scale_load_to_cpu() scales load in reference to
-		 * rq->max_freq.
+		 * cluster->max_freq.
 		 */
 		load[i] = scale_load_to_cpu(load[i], cpu);
 
 		notifier_sent[i] = rq->notifier_sent;
 		rq->notifier_sent = 0;
-		cur_freq[i] = rq->cur_freq;
-		max_freq[i] = rq->max_freq;
+		cur_freq[i] = cpu_cur_freq(cpu);
+		max_freq[i] = cpu_max_freq(cpu);
 		i++;
 	}
 
@@ -2192,10 +2276,10 @@ void sched_get_cpus_busy(unsigned long *busy, const struct cpumask *query_cpus)
 			if (load[i] > window_size)
 				load[i] = window_size;
 			load[i] = scale_load_to_freq(load[i], cur_freq[i],
-						     rq->max_possible_freq);
+						     cpu_max_possible_freq(cpu));
 		} else {
 			load[i] = scale_load_to_freq(load[i], max_freq[i],
-						     rq->max_possible_freq);
+						     cpu_max_possible_freq(cpu));
 		}
 
 		busy[i] = div64_u64(load[i], NSEC_PER_USEC);
@@ -2467,6 +2551,9 @@ static int cpufreq_notifier_policy(struct notifier_block *nb,
 		cpu_rq(i)->max_freq = policy->max;
 		cpu_rq(i)->max_possible_freq = policy->cpuinfo.max_freq;
 	}
+
+	if (new_cluster(policy))
+		add_cluster(policy);
 
 	max_possible_freq = max(max_possible_freq, policy->cpuinfo.max_freq);
 	if (min_max_freq == 1)
@@ -9000,6 +9087,10 @@ void __init sched_init(void)
 
 	BUG_ON(num_possible_cpus() > BITS_PER_LONG);
 
+#ifdef CONFIG_SCHED_HMP
+	bitmap_clear(all_cluster_ids, 0, NR_CPUS);
+#endif
+
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	alloc_size += 2 * nr_cpu_ids * sizeof(void **);
 #endif
@@ -9141,6 +9232,12 @@ void __init sched_init(void)
 		rq->avg_irqload = 0;
 		rq->irqload_ts = 0;
 		rq->prefer_idle = 1;
+		/*
+		 * All cpus part of same cluster by default. This avoids the
+		 * need to check for rq->cluster being non-NULL in hot-paths
+		 * like select_best_cpu()
+		 */
+		rq->cluster = &init_cluster;
 #ifdef CONFIG_SCHED_FREQ_INPUT
 		rq->old_busy_time = 0;
 		rq->curr_runnable_sum = rq->prev_runnable_sum = 0;
