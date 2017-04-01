@@ -15,4 +15,3 @@ config MACH_FIH_NBQ
 	  Support for FIH NBQ variant
 
 endmenu
-
