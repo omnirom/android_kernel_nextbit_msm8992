@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -2695,10 +2695,11 @@ static ssize_t dynamic_fps_sysfs_wta_dfps(struct device *dev,
 		pr_err("no panel connected for fb%d\n", mfd->index);
 		return -ENODEV;
 	}
-
-	if (dfps == pdata->panel_info.mipi.frame_rate) {
-		pr_debug("%s: FPS is already %d\n",
-			__func__, dfps);
+	if (((pdata->panel_info.type == MIPI_VIDEO_PANEL) &&
+	     (dfps == pdata->panel_info.mipi.frame_rate)) ||
+	    ((pdata->panel_info.type == MIPI_CMD_PANEL) &&
+	     (dfps == pdata->panel_info.mipi.refresh_rate))) {
+		pr_debug("%s: FPS is already %d\n", __func__, dfps);
 		return count;
 	}
 
@@ -3549,12 +3550,14 @@ static int mdss_mdp_hw_cursor_update(struct msm_fb_data_type *mfd,
 
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 
-	if (cursor->set & FB_CUR_SETIMAGE) {
+	if (mfd->cursor_buf && (cursor->set & FB_CUR_SETIMAGE)) {
 		u32 cursor_addr;
 		if (img->width * img->height * 4 > cursor_frame_size) {
 			pr_err("cursor image size is too large\n");
+			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 			return -EINVAL;
 		}
+
 		ret = copy_from_user(mfd->cursor_buf, img->data,
 				     img->width * img->height * 4);
 		if (ret) {
@@ -5238,13 +5241,10 @@ int mdss_mdp_overlay_init(struct msm_fb_data_type *mfd)
 	if (rc)
 		pr_warn("problem creating link to mdss_fb sysfs\n");
 
-	if (mfd->panel_info->type == MIPI_VIDEO_PANEL) {
-		rc = sysfs_create_group(&dev->kobj,
-			&dynamic_fps_fs_attrs_group);
-		if (rc) {
-			pr_err("Error dfps sysfs creation ret=%d\n", rc);
-			goto init_fail;
-		}
+	rc = sysfs_create_group(&dev->kobj, &dynamic_fps_fs_attrs_group);
+	if (rc) {
+		pr_err("Error dfps sysfs creation ret=%d\n", rc);
+		goto init_fail;
 	}
 
 	if (mfd->panel_info->mipi.dms_mode ||
