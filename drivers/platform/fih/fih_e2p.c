@@ -83,7 +83,7 @@ static int fih_e2p_proc_read_wifi_mac_show(struct seq_file *m, void *v)
 		return (0);
 	}
 
-	seq_printf(m, "Intf0MacAddress=%02X%02X%02X%02X%02X%02X\nEND\n",
+	seq_printf(m, "%02X:%02X:%02X:%02X:%02X:%02X\n",
 		e2p->wifi_mac[0], e2p->wifi_mac[1], e2p->wifi_mac[2], e2p->wifi_mac[3], e2p->wifi_mac[4], e2p->wifi_mac[5]);
 
 	iounmap(e2p);
