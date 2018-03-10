@@ -5744,6 +5744,7 @@ VOS_STATUS hdd_update_mac_config(hdd_context_t *pHddCtx)
 
    for (i = 0; i < VOS_MAC_ADDR_SIZE; i++) {
       customMacAddr[i] = e2p->wifi_mac[i];
+      pHddCtx->cfg_ini->intfMacAddr[0].bytes[i] = e2p->wifi_mac[i];
    }
 
    sme_SetCustomMacAddr(customMacAddr);
